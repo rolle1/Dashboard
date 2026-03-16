@@ -78,6 +78,9 @@ function blockPct(block, now) {
   return Math.min(100, Math.max(0, ((cur - s) / (e - s)) * 100));
 }
 
+// ── STORAGE KEY ────────────────────────────────────────────────
+const STORAGE_KEY = "edwin-dashboard";
+
 // ── DEFAULT STATE ──────────────────────────────────────────────
 const DEFAULT_STATE = {
   gymStreak: 0,
@@ -111,28 +114,23 @@ const cardStyle = {
 
 export default function Dashboard() {
   const [now, setNow] = useState(new Date());
-  const [data, setData] = useState(DEFAULT_STATE);
-  const [loaded, setLoaded] = useState(false);
+  const [data, setData] = useState(() => {
+    // Load from localStorage synchronously on first render
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        return { ...DEFAULT_STATE, ...saved, projects: saved.projects || PROJECTS_DEFAULT };
+      }
+    } catch (_) {}
+    return DEFAULT_STATE;
+  });
   const [gymFeedback, setGymFeedback] = useState("");
 
-  // ── LOAD ──
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await window.storage.get("edwin-dashboard");
-        if (res?.value) {
-          const saved = JSON.parse(res.value);
-          setData({ ...DEFAULT_STATE, ...saved, projects: saved.projects || PROJECTS_DEFAULT });
-        }
-      } catch (_) {}
-      setLoaded(true);
-    })();
-  }, []);
-
   // ── SAVE ──
-  const save = useCallback(async (next) => {
+  const save = useCallback((next) => {
     setData(next);
-    try { await window.storage.set("edwin-dashboard", JSON.stringify(next)); } catch (_) {}
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch (_) {}
   }, []);
 
   // ── CLOCK ──
@@ -140,12 +138,6 @@ export default function Dashboard() {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
-
-  if (!loaded) return (
-    <div style={{ background: S.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <span style={{ color: S.purple, fontFamily: "monospace", fontSize: 14 }}>loading dashboard…</span>
-    </div>
-  );
 
   const block = getCurrentBlock(now);
   const pct   = blockPct(block, now);
