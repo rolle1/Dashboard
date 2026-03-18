@@ -78,6 +78,23 @@ function blockPct(block, now) {
   return Math.min(100, Math.max(0, ((cur - s) / (e - s)) * 100));
 }
 
+// Calculate streak from gymLog array
+function calcStreak(gymLog, referenceDate) {
+  if (!gymLog || gymLog.length === 0) return 0;
+  const logSet = new Set(gymLog);
+  let streak = 0;
+  const check = new Date(referenceDate);
+  // If today isn't checked in, start from yesterday
+  if (!logSet.has(check.toDateString())) {
+    check.setDate(check.getDate() - 1);
+  }
+  while (logSet.has(check.toDateString())) {
+    streak++;
+    check.setDate(check.getDate() - 1);
+  }
+  return streak;
+}
+
 // ── STORAGE KEY ────────────────────────────────────────────────
 const STORAGE_KEY = "edwin-dashboard";
 
@@ -86,6 +103,7 @@ const DEFAULT_STATE = {
   gymStreak: 0,
   lastGymDate: null,
   gymLog: [],
+  gymWorkouts: {}, // { "Mon Mar 18 2024": { notes: "", exercises: [{name,sets,reps,weight}] } }
   az104: {},
   examDate: "",
   projects: PROJECTS_DEFAULT,
@@ -112,10 +130,238 @@ const cardStyle = {
   padding: "20px 22px",
 };
 
+// ── WORKOUT MODAL ──────────────────────────────────────────────
+function WorkoutModal({ dateStr, workout, onSave, onClose }) {
+  const [notes, setNotes] = useState(workout?.notes || "");
+  const [exercises, setExercises] = useState(
+    workout?.exercises || [{ name: "", sets: "", reps: "", weight: "" }]
+  );
+
+  function addExercise() {
+    setExercises([...exercises, { name: "", sets: "", reps: "", weight: "" }]);
+  }
+  function removeExercise(i) {
+    setExercises(exercises.filter((_, idx) => idx !== i));
+  }
+  function updateExercise(i, field, val) {
+    setExercises(exercises.map((ex, idx) => idx === i ? { ...ex, [field]: val } : ex));
+  }
+
+  const displayDate = new Date(dateStr).toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric"
+  });
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20
+    }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{
+        background: S.card, border: `1px solid ${S.border}`, borderRadius: 20,
+        padding: 28, width: "100%", maxWidth: 520, maxHeight: "85vh", overflowY: "auto"
+      }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+          <div>
+            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: "#EF4444", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 4 }}>
+              💪 Workout Log
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: S.text }}>{displayDate}</div>
+          </div>
+          <button onClick={onClose} style={{
+            background: S.surface, border: `1px solid ${S.border}`, color: S.muted,
+            borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 13, fontFamily: "'Syne', sans-serif"
+          }}>✕</button>
+        </div>
+
+        {/* Exercises */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 10 }}>
+            Exercises
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {exercises.map((ex, i) => (
+              <div key={i} style={{ background: S.surface, border: `1px solid ${S.border}`, borderRadius: 10, padding: "10px 12px" }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                  <input
+                    placeholder="Exercise name (e.g. Bench Press)"
+                    value={ex.name}
+                    onChange={e => updateExercise(i, "name", e.target.value)}
+                    style={inputStyle}
+                  />
+                  <button onClick={() => removeExercise(i)} style={{
+                    background: "transparent", border: `1px solid ${S.border}`, color: S.muted,
+                    borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 11, flexShrink: 0
+                  }}>✕</button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: S.muted, marginBottom: 3 }}>SETS</div>
+                    <input placeholder="e.g. 4" value={ex.sets} onChange={e => updateExercise(i, "sets", e.target.value)} style={inputStyle} />
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: S.muted, marginBottom: 3 }}>REPS</div>
+                    <input placeholder="e.g. 8" value={ex.reps} onChange={e => updateExercise(i, "reps", e.target.value)} style={inputStyle} />
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: S.muted, marginBottom: 3 }}>WEIGHT</div>
+                    <input placeholder="e.g. 185lb" value={ex.weight} onChange={e => updateExercise(i, "weight", e.target.value)} style={inputStyle} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <button onClick={addExercise} style={{
+            marginTop: 8, width: "100%", padding: "9px", borderRadius: 8, fontSize: 12,
+            background: "transparent", border: `1px dashed ${S.border}`, color: S.muted,
+            cursor: "pointer", fontFamily: "'Syne', sans-serif", fontWeight: 600,
+            transition: "all 0.15s"
+          }}
+            onMouseEnter={e => { e.target.style.borderColor = S.purple; e.target.style.color = S.purpleL; }}
+            onMouseLeave={e => { e.target.style.borderColor = S.border; e.target.style.color = S.muted; }}
+          >
+            + Add Exercise
+          </button>
+        </div>
+
+        {/* Notes */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8 }}>
+            Notes
+          </div>
+          <textarea
+            placeholder="How did it feel? PRs? Anything to remember..."
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={3}
+            style={{ ...inputStyle, width: "100%", resize: "vertical", lineHeight: 1.6 }}
+          />
+        </div>
+
+        {/* Save */}
+        <button onClick={() => onSave({ notes, exercises: exercises.filter(e => e.name.trim()) })} style={{
+          width: "100%", padding: "12px", borderRadius: 10, fontSize: 14, fontWeight: 700,
+          background: "linear-gradient(135deg, #7C3AED, #DC2626)", color: "#fff",
+          border: "none", cursor: "pointer", fontFamily: "'Syne', sans-serif",
+          transition: "all 0.15s"
+        }}>
+          💾 Save Workout
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const inputStyle = {
+  background: "#07070E",
+  border: `1px solid #1E1E35`,
+  color: "#E2E8F0",
+  borderRadius: 7,
+  padding: "7px 10px",
+  fontSize: 12,
+  fontFamily: "'JetBrains Mono', monospace",
+  outline: "none",
+  width: "100%",
+};
+
+// ── GYM CALENDAR ──────────────────────────────────────────────
+function GymCalendar({ gymLog, gymWorkouts, now, onToggleDay, onOpenWorkout }) {
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    days.push(d);
+  }
+
+  const logSet = new Set(gymLog || []);
+
+  // Group into weeks
+  const weeks = [];
+  let week = [];
+  // Pad start of first week
+  const firstDay = days[0].getDay(); // 0=Sun
+  for (let i = 0; i < firstDay; i++) week.push(null);
+  days.forEach(d => {
+    week.push(d);
+    if (week.length === 7) { weeks.push(week); week = []; }
+  });
+  if (week.length > 0) {
+    while (week.length < 7) week.push(null);
+    weeks.push(week);
+  }
+
+  const dayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+  return (
+    <div>
+      {/* Day labels */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, marginBottom: 3 }}>
+        {dayLabels.map(d => (
+          <div key={d} style={{ textAlign: "center", fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: S.muted }}>{d}</div>
+        ))}
+      </div>
+      {/* Calendar grid */}
+      {weeks.map((wk, wi) => (
+        <div key={wi} style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, marginBottom: 3 }}>
+          {wk.map((d, di) => {
+            if (!d) return <div key={di} />;
+            const ds = d.toDateString();
+            const isToday = ds === now.toDateString();
+            const hit = logSet.has(ds);
+            const hasWorkout = gymWorkouts && gymWorkouts[ds] && (gymWorkouts[ds].exercises?.length > 0 || gymWorkouts[ds].notes);
+            const isFuture = d > now;
+
+            return (
+              <div key={di} style={{ position: "relative" }}>
+                <div
+                  onClick={() => !isFuture && onToggleDay(ds)}
+                  title={`${d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} — click to ${hit ? "unmark" : "mark"} gym`}
+                  style={{
+                    aspectRatio: "1", borderRadius: 5, cursor: isFuture ? "default" : "pointer",
+                    background: hit ? "#EF4444" : isToday ? S.purpleDim : "transparent",
+                    border: isToday ? `1px solid ${S.purple}` : `1px solid ${hit ? "#EF444466" : S.border}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexDirection: "column", gap: 1,
+                    transition: "all 0.15s",
+                    opacity: isFuture ? 0.2 : 1,
+                  }}
+                  onMouseEnter={e => { if (!isFuture) e.currentTarget.style.filter = "brightness(1.3)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.filter = "none"; }}
+                >
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: hit ? "#fff" : isToday ? S.purpleL : S.muted, lineHeight: 1 }}>
+                    {d.getDate()}
+                  </span>
+                </div>
+                {/* Workout dot indicator */}
+                {hasWorkout && (
+                  <div
+                    onClick={e => { e.stopPropagation(); onOpenWorkout(ds); }}
+                    title="View/edit workout"
+                    style={{
+                      position: "absolute", bottom: 2, right: 2,
+                      width: 4, height: 4, borderRadius: "50%",
+                      background: "#F97316", cursor: "pointer"
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, color: S.muted, marginTop: 6, display: "flex", gap: 12 }}>
+        <span><span style={{ color: "#EF4444" }}>■</span> gym day</span>
+        <span><span style={{ color: "#F97316" }}>●</span> workout logged</span>
+        <span style={{ color: S.muted }}>tap any day to toggle</span>
+      </div>
+    </div>
+  );
+}
+
+// ── MAIN COMPONENT ────────────────────────────────────────────
 export default function Dashboard() {
   const [now, setNow] = useState(new Date());
   const [data, setData] = useState(() => {
-    // Load from localStorage synchronously on first render
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
@@ -126,6 +372,8 @@ export default function Dashboard() {
     return DEFAULT_STATE;
   });
   const [gymFeedback, setGymFeedback] = useState("");
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [workoutModal, setWorkoutModal] = useState(null); // dateStr or null
 
   // ── SAVE ──
   const save = useCallback((next) => {
@@ -143,7 +391,7 @@ export default function Dashboard() {
   const pct   = blockPct(block, now);
   const bColor = BLOCK_COLORS[block.block] || S.purple;
 
-  // ── GYM CHECK-IN ──
+  // ── GYM CHECK-IN (today) ──
   function gymCheckIn() {
     const today = now.toDateString();
     if (data.lastGymDate === today) {
@@ -151,11 +399,43 @@ export default function Dashboard() {
       setTimeout(() => setGymFeedback(""), 2500);
       return;
     }
-    const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
-    const streak = data.lastGymDate === yesterday.toDateString() ? data.gymStreak + 1 : 1;
-    save({ ...data, gymStreak: streak, lastGymDate: today, gymLog: [today, ...(data.gymLog || [])].slice(0, 30) });
+    const newLog = [today, ...(data.gymLog || []).filter(d => d !== today)].slice(0, 90);
+    const streak = calcStreak(newLog, now);
+    const next = { ...data, gymStreak: streak, lastGymDate: today, gymLog: newLog };
+    save(next);
     setGymFeedback(`Day ${streak} 🔥 Streak locked in!`);
     setTimeout(() => setGymFeedback(""), 3000);
+  }
+
+  // ── TOGGLE DAY (retroactive) ──
+  function toggleGymDay(dateStr) {
+    const currentLog = data.gymLog || [];
+    const logSet = new Set(currentLog);
+    let newLog;
+    if (logSet.has(dateStr)) {
+      newLog = currentLog.filter(d => d !== dateStr);
+    } else {
+      newLog = [dateStr, ...currentLog].slice(0, 90);
+    }
+    const streak = calcStreak(newLog, now);
+    const lastGymDate = newLog.length > 0 ? newLog[0] : null;
+    save({ ...data, gymLog: newLog, gymStreak: streak, lastGymDate });
+  }
+
+  // ── SAVE WORKOUT ──
+  function saveWorkout(dateStr, workoutData) {
+    const gymWorkouts = { ...(data.gymWorkouts || {}), [dateStr]: workoutData };
+    // Also ensure the day is marked as a gym day
+    const currentLog = data.gymLog || [];
+    const logSet = new Set(currentLog);
+    let newLog = currentLog;
+    if (!logSet.has(dateStr)) {
+      newLog = [dateStr, ...currentLog].slice(0, 90);
+    }
+    const streak = calcStreak(newLog, now);
+    const lastGymDate = newLog.length > 0 ? newLog[0] : null;
+    save({ ...data, gymWorkouts, gymLog: newLog, gymStreak: streak, lastGymDate });
+    setWorkoutModal(null);
   }
 
   // ── AZ TOGGLE ──
@@ -188,7 +468,11 @@ export default function Dashboard() {
     save({ ...data, projects });
   }
 
-  const checkedToday = data.lastGymDate === now.toDateString();
+  const checkedToday = (data.gymLog || []).includes(now.toDateString());
+  const streak = calcStreak(data.gymLog || [], now);
+
+  // Recent workout for today's log button label
+  const todayWorkout = data.gymWorkouts?.[now.toDateString()];
 
   return (
     <div style={{ background: S.bg, minHeight: "100vh", padding: "28px 20px", fontFamily: "'Syne', sans-serif", color: S.text }}>
@@ -209,6 +493,8 @@ export default function Dashboard() {
         @keyframes fadeUp { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: translateY(0); } }
         .pulse { animation: pulse 2s infinite; }
         @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+        textarea { background: #07070E; border: 1px solid #1E1E35; color: #E2E8F0; border-radius: 7px; padding: 8px 10px; font-size: 12px; font-family: 'JetBrains Mono', monospace; outline: none; }
+        textarea:focus, input:focus { border-color: #9333EA !important; }
       `}</style>
 
       <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -266,30 +552,76 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 56, fontWeight: 800, color: "#EF4444", lineHeight: 1 }}>{data.gymStreak}</span>
+              <span style={{ fontSize: 56, fontWeight: 800, color: "#EF4444", lineHeight: 1 }}>{streak}</span>
               <span style={{ color: S.muted, fontSize: 14 }}>days</span>
             </div>
-            <div style={{ color: S.muted, fontSize: 12, fontFamily: "'JetBrains Mono', monospace", marginBottom: 16 }}>
-              {data.lastGymDate ? `last: ${new Date(data.lastGymDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}` : "no sessions yet"}
+            <div style={{ color: S.muted, fontSize: 12, fontFamily: "'JetBrains Mono', monospace", marginBottom: 14 }}>
+              {data.gymLog?.length > 0
+                ? `last: ${new Date(data.gymLog[0]).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}`
+                : "no sessions yet"}
             </div>
 
             {/* Last 7 days dots */}
-            <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
               {Array.from({ length: 7 }).map((_, i) => {
                 const d = new Date(now); d.setDate(d.getDate() - (6 - i));
                 const hit = (data.gymLog || []).includes(d.toDateString());
-                return <div key={i} style={{ flex: 1, height: 6, borderRadius: 3, background: hit ? "#EF4444" : S.border }} />;
+                const hasW = data.gymWorkouts?.[d.toDateString()];
+                return (
+                  <div key={i} style={{ flex: 1, position: "relative" }}>
+                    <div
+                      onClick={() => toggleGymDay(d.toDateString())}
+                      title={`${d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})} — click to toggle`}
+                      style={{ height: 6, borderRadius: 3, background: hit ? "#EF4444" : S.border, cursor: "pointer", transition: "background 0.2s" }}
+                    />
+                    {hasW && <div style={{ position: "absolute", top: -3, right: 0, width: 4, height: 4, borderRadius: "50%", background: "#F97316" }} />}
+                  </div>
+                );
               })}
             </div>
 
-            <button className="btn" onClick={gymCheckIn} style={{
-              width: "100%", padding: "11px", borderRadius: 10, fontSize: 13,
-              background: checkedToday ? S.border : "linear-gradient(135deg, #7C3AED, #DC2626)",
-              color: checkedToday ? S.muted : "#fff",
+            {/* Action buttons */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <button className="btn" onClick={gymCheckIn} style={{
+                flex: 1, padding: "10px", borderRadius: 10, fontSize: 12,
+                background: checkedToday ? S.border : "linear-gradient(135deg, #7C3AED, #DC2626)",
+                color: checkedToday ? S.muted : "#fff",
+              }}>
+                {checkedToday ? "✓ Checked In" : "💪 Check In Today"}
+              </button>
+              <button className="btn" onClick={() => setWorkoutModal(now.toDateString())} style={{
+                flex: 1, padding: "10px", borderRadius: 10, fontSize: 12,
+                background: todayWorkout ? "#1A2E1A" : S.surface,
+                color: todayWorkout ? "#4ADE80" : S.dim,
+                border: `1px solid ${todayWorkout ? "#166534" : S.border}`,
+              }}>
+                {todayWorkout ? "📋 Edit Workout" : "📋 Log Workout"}
+              </button>
+            </div>
+
+            {/* History toggle */}
+            <button className="btn" onClick={() => setShowCalendar(v => !v)} style={{
+              width: "100%", padding: "8px", borderRadius: 8, fontSize: 11,
+              background: "transparent", border: `1px solid ${S.border}`,
+              color: S.muted,
             }}>
-              {checkedToday ? "✓ Session Logged" : "💪 Log Today's Session"}
+              {showCalendar ? "▲ Hide History" : "▼ View 30-Day History"}
             </button>
+
             {gymFeedback && <div style={{ marginTop: 8, textAlign: "center", fontSize: 12, color: "#4ADE80", fontFamily: "'JetBrains Mono', monospace" }}>{gymFeedback}</div>}
+
+            {/* Calendar dropdown */}
+            {showCalendar && (
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${S.border}` }}>
+                <GymCalendar
+                  gymLog={data.gymLog}
+                  gymWorkouts={data.gymWorkouts}
+                  now={now}
+                  onToggleDay={toggleGymDay}
+                  onOpenWorkout={(ds) => setWorkoutModal(ds)}
+                />
+              </div>
+            )}
           </div>
 
           {/* ── AZ-104 PROGRESS ── */}
@@ -299,7 +631,6 @@ export default function Dashboard() {
               <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, color: S.purpleL, fontWeight: 600 }}>{azPct}%</span>
             </div>
 
-            {/* Exam date input */}
             <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
               <span style={{ fontSize: 11, color: S.muted, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>exam date:</span>
               <input
@@ -401,6 +732,16 @@ export default function Dashboard() {
           edwin.obiorah · personal os · data saved locally
         </div>
       </div>
+
+      {/* ── WORKOUT MODAL ── */}
+      {workoutModal && (
+        <WorkoutModal
+          dateStr={workoutModal}
+          workout={data.gymWorkouts?.[workoutModal]}
+          onSave={(workoutData) => saveWorkout(workoutModal, workoutData)}
+          onClose={() => setWorkoutModal(null)}
+        />
+      )}
     </div>
   );
 }
